@@ -113,13 +113,14 @@ c3.metric("Anomaly Rate", f"{anomaly_count/total_count*100:.1f}%")
 c4.metric("Sensor Features", f"{X.shape[1]}")
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "FAB Monitoring",
     "SPC Control Chart",
     "Anomaly Detection & Risk Scoring",
     "Feature Analysis",
     "Agent Diagnosis Report",
-    "Operation Log"
+    "Operation Log",
+    "Stream Simulator"
 ])
 
 # TAB 1: FAB 모니터링
@@ -586,3 +587,92 @@ with tab6:
         st.dataframe(log_df, use_container_width=True, hide_index=True)
     else:
         st.info("No operation logs yet. Run the Agent pipeline to start logging.")
+
+# TAB 7: Stream Simulator
+with tab7:
+    st.subheader("Real-time Sensor Stream Simulator")
+    st.markdown("Simulates live sensor data ingestion and anomaly detection in real-time")
+    st.markdown("---")
+
+    from src.simulator.stream_simulator import SensorStreamSimulator
+    from sklearn.ensemble import IsolationForest
+    import time
+
+    col_s1, col_s2 = st.columns([1, 3])
+    with col_s1:
+        stream_n = st.slider("Samples per tick", 5, 50, 20)
+        stream_speed = st.slider("Speed (seconds)", 0.5, 3.0, 1.0, 0.5)
+        run_stream = st.button("Start Stream", use_container_width=True)
+
+    with col_s2:
+        stream_placeholder = st.empty()
+
+    if run_stream:
+        simulator = SensorStreamSimulator(X, y, window_size=stream_n)
+        if_model = IsolationForest(n_estimators=100, contamination=0.07,
+                                   random_state=42, n_jobs=1)
+        if_model.fit(X)
+
+        risk_scorer = PreFailureRiskScorer()
+        risk_scorer.train(X, y)
+
+        history = []
+        stop_placeholder = st.empty()
+
+        for tick in range(15):
+            X_window, y_window = simulator.get_random_sample(stream_n)
+            scores = if_model.decision_function(X_window)
+            preds  = if_model.predict(X_window)
+            risks  = risk_scorer.predict_risk(X_window)
+
+            anomaly_count = int((preds == -1).sum())
+            high_risk     = int((risks >= 0.7).sum())
+            avg_risk      = float(risks.mean())
+
+            history.append({
+                "tick": tick + 1,
+                "anomaly_count": anomaly_count,
+                "high_risk": high_risk,
+                "avg_risk": round(avg_risk, 3),
+                "timestamp": datetime.now().strftime("%H:%M:%S")
+            })
+
+            hist_df = pd.DataFrame(history)
+
+            with stream_placeholder.container():
+                st.markdown(f"**Tick {tick+1}/15** — {datetime.now().strftime('%H:%M:%S')}")
+
+                m1, m2, m3 = st.columns(3)
+                status_color = "🔴" if anomaly_count > 3 else "🟡" if anomaly_count > 0 else "🟢"
+                m1.metric("Anomalies", f"{status_color} {anomaly_count}")
+                m2.metric("High Risk", f"{high_risk}")
+                m3.metric("Avg Risk Score", f"{avg_risk:.3f}")
+
+                if len(hist_df) > 1:
+                    fig_s, axes_s = plt.subplots(1, 2, figsize=(10, 2.5))
+                    axes_s[0].plot(hist_df["tick"], hist_df["anomaly_count"],
+                                   marker='o', color='#ff4b4b', linewidth=2)
+                    axes_s[0].fill_between(hist_df["tick"], hist_df["anomaly_count"],
+                                           alpha=0.2, color='#ff4b4b')
+                    axes_s[0].set_title("Anomaly Count per Tick")
+                    axes_s[0].set_xlabel("Tick")
+
+                    axes_s[1].plot(hist_df["tick"], hist_df["avg_risk"],
+                                   marker='s', color='steelblue', linewidth=2)
+                    axes_s[1].axhline(0.7, color='red', linestyle='--',
+                                      linewidth=1, label='High Risk')
+                    axes_s[1].axhline(0.4, color='orange', linestyle='--',
+                                      linewidth=1, label='Medium Risk')
+                    axes_s[1].set_title("Avg Risk Score per Tick")
+                    axes_s[1].set_xlabel("Tick")
+                    axes_s[1].legend(fontsize=8)
+                    axes_s[1].set_ylim(0, 1)
+                    st.pyplot(fig_s)
+                    plt.close(fig_s)
+
+                st.dataframe(hist_df.tail(5)[::-1].reset_index(drop=True),
+                             use_container_width=True, hide_index=True)
+
+            time.sleep(stream_speed)
+
+        st.success("Stream simulation complete. 15 ticks processed.")
