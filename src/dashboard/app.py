@@ -60,6 +60,52 @@ X, y = load_data()
 anomaly_count = int((y == -1).sum())
 total_count = len(y)
 
+# ── ALERT SYSTEM ──────────────────────────────────────────────────────────────
+if os.path.exists("data/raw/top5_sensors.csv"):
+    top5_df_alert = pd.read_csv("data/raw/top5_sensors.csv")
+    alerts = []
+    for _, row in top5_df_alert.iterrows():
+        sid = int(row['sensor'])
+        info = get_process_info(sid)
+        proc = info["process"]
+        score = float(row['shap_score'])
+        thresh = PROCESS_THRESHOLDS.get(proc, {"warning": 0.6, "critical": 0.8})
+        normalized = min(score / 0.03, 1.0)
+        if normalized >= thresh["critical"]:
+            alerts.append({
+                "level": "CRITICAL",
+                "process": proc,
+                "param": info["param"],
+                "stage": info["stage"],
+                "score": normalized
+            })
+        elif normalized >= thresh["warning"]:
+            alerts.append({
+                "level": "WARNING",
+                "process": proc,
+                "param": info["param"],
+                "stage": info["stage"],
+                "score": normalized
+            })
+
+    if alerts:
+        critical_alerts = [a for a in alerts if a["level"] == "CRITICAL"]
+        warning_alerts  = [a for a in alerts if a["level"] == "WARNING"]
+
+        if critical_alerts:
+            alert_msg = " | ".join(
+                [f"🔴 [{a['process']}] {a['param']} — Risk {a['score']:.1%}" for a in critical_alerts]
+            )
+            st.error(f"**CRITICAL ALERT** {alert_msg}")
+        if warning_alerts:
+            warn_msg = " | ".join(
+                [f"🟡 [{a['process']}] {a['param']} — Risk {a['score']:.1%}" for a in warning_alerts]
+            )
+            st.warning(f"**WARNING** {warn_msg}")
+    else:
+        st.success("✅ All processes operating within normal parameters.")
+# ──────────────────────────────────────────────────────────────────────────────
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Samples", f"{total_count:,}")
 c2.metric("Anomaly Samples", f"{anomaly_count}")
@@ -97,7 +143,7 @@ with tab1:
                 status = "🔴 ANOMALY"
                 color = "#ff4b4b"
             elif normalized >= thresh["warning"]:
-                status = "🟡  WARNING"
+                status = "🟡 WARNING"
                 color = "#ffa500"
             else:
                 status = "🟢 NORMAL"
@@ -261,7 +307,7 @@ with tab3:
     else:
         st.info("Click 'Run Analysis' in the sidebar to start.")
 
-# TAB 4: SHAP
+# TAB 4: SHAP + Root Cause Graph
 with tab4:
     st.subheader("Feature Analysis (SHAP Feature Importance)")
 
@@ -289,7 +335,78 @@ with tab4:
         st.pyplot(fig4)
         plt.close(fig4)
 
+        # ── ROOT CAUSE GRAPH ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### Root Cause Analysis — Process-Level Impact")
+        st.markdown("Aggregated SHAP impact score grouped by FAB process stage")
+
+        process_impact = top5_df.groupby('Process')['shap_score'].sum().reset_index()
+        process_impact.columns = ['Process', 'Total Impact']
+        process_impact = process_impact.sort_values('Total Impact', ascending=False)
+
+        # 공정별 임팩트 bar chart
+        fig_rc, ax_rc = plt.subplots(figsize=(8, 4))
+        impact_colors = []
+        for _, row in process_impact.iterrows():
+            thresh = PROCESS_THRESHOLDS.get(row['Process'], {"warning": 0.6, "critical": 0.8})
+            normalized = min(row['Total Impact'] / 0.03, 1.0)
+            if normalized >= thresh["critical"]:
+                impact_colors.append("#ff4b4b")
+            elif normalized >= thresh["warning"]:
+                impact_colors.append("#ffa500")
+            else:
+                impact_colors.append("#00cc44")
+
+        bars = ax_rc.bar(process_impact['Process'], process_impact['Total Impact'],
+                         color=impact_colors, edgecolor='white', linewidth=1.5)
+        for bar, val in zip(bars, process_impact['Total Impact']):
+            ax_rc.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.0005,
+                       f'{val:.4f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+        ax_rc.set_title('Root Cause — Anomaly Impact by Process', fontsize=13)
+        ax_rc.set_xlabel('Process')
+        ax_rc.set_ylabel('Cumulative SHAP Impact Score')
+        ax_rc.set_ylim(0, process_impact['Total Impact'].max() * 1.2)
+
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#ff4b4b', label='Critical'),
+            Patch(facecolor='#ffa500', label='Warning'),
+            Patch(facecolor='#00cc44', label='Normal'),
+        ]
+        ax_rc.legend(handles=legend_elements, loc='upper right')
+        st.pyplot(fig_rc)
+        plt.close(fig_rc)
+
+        # 공정별 주요 센서 요약 카드
+        st.markdown("#### Sensor Contribution by Process")
+        proc_cols = st.columns(len(process_impact))
+        for i, (_, prow) in enumerate(process_impact.iterrows()):
+            proc = prow['Process']
+            sensors_in_proc = top5_df[top5_df['Process'] == proc]
+            thresh = PROCESS_THRESHOLDS.get(proc, {"warning": 0.6, "critical": 0.8})
+            normalized = min(prow['Total Impact'] / 0.03, 1.0)
+            if normalized >= thresh["critical"]:
+                card_color = "#ff4b4b"
+            elif normalized >= thresh["warning"]:
+                card_color = "#ffa500"
+            else:
+                card_color = "#00cc44"
+
+            sensor_list = "<br>".join(
+                [f"• {r['Parameter']} ({r['shap_score']:.4f})" for _, r in sensors_in_proc.iterrows()]
+            )
+            with proc_cols[i]:
+                st.markdown(f"""
+                <div style='background:{card_color}22; border:2px solid {card_color};
+                border-radius:8px; padding:12px; text-align:center;'>
+                <h4 style='color:{card_color}; margin:0'>{proc}</h4>
+                <p style='font-size:11px; margin:4px 0'>Impact: {prow['Total Impact']:.4f}</p>
+                <p style='font-size:11px; color:#555; margin:0; text-align:left'>{sensor_list}</p>
+                </div>""", unsafe_allow_html=True)
+        # ──────────────────────────────────────────────────────────────────────
+
         if os.path.exists("data/raw/shap_summary.png"):
+            st.markdown("---")
             st.image("data/raw/shap_summary.png", caption="SHAP Summary Plot")
     else:
         st.info("Run feature importance analysis first: python src/analysis/feature_importance.py")
@@ -343,7 +460,7 @@ with tab5:
     else:
         st.info("Run feature importance analysis first.")
 
-# TAB 6: 운영 로그
+# TAB 6: 운영 로그 + Anomaly History Chart
 with tab6:
     st.subheader("FAB Operation Log")
     st.markdown("Agent pipeline execution history")
@@ -351,17 +468,71 @@ with tab6:
     log_path = "data/raw/operation_log.csv"
     if os.path.exists(log_path):
         log_df = pd.read_csv(log_path)
-        st.markdown(f"**Total records: {len(log_df)}**")
         log_df = log_df.sort_values("timestamp", ascending=False).reset_index(drop=True)
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+        st.markdown(f"**Total records: {len(log_df)}**")
 
         if len(log_df) > 1:
+            # ── ANOMALY HISTORY CHART ─────────────────────────────────────────
             st.markdown("---")
+            st.markdown("### Anomaly History Analysis")
+
+            col_h1, col_h2 = st.columns(2)
+
+            with col_h1:
+                # 시간대별 anomaly count
+                fig_h1, ax_h1 = plt.subplots(figsize=(6, 3))
+                ax_h1.plot(range(len(log_df)), log_df['anomaly_count'].values[::-1],
+                           marker='o', color='steelblue', linewidth=2, markersize=5)
+                ax_h1.fill_between(range(len(log_df)),
+                                   log_df['anomaly_count'].values[::-1],
+                                   alpha=0.2, color='steelblue')
+                ax_h1.set_title('Anomaly Count per Execution')
+                ax_h1.set_xlabel('Execution Index')
+                ax_h1.set_ylabel('Anomaly Count')
+                st.pyplot(fig_h1)
+                plt.close(fig_h1)
+
+            with col_h2:
+                # 공정별 이상 발생 빈도
+                if 'primary_process' in log_df.columns:
+                    proc_freq = log_df['primary_process'].value_counts()
+                    fig_h2, ax_h2 = plt.subplots(figsize=(6, 3))
+                    proc_colors = ["#ff4b4b" if p in ["CVD", "ETCH"] else "#ffa500"
+                                   for p in proc_freq.index]
+                    ax_h2.bar(proc_freq.index, proc_freq.values, color=proc_colors)
+                    ax_h2.set_title('Anomaly Frequency by Process')
+                    ax_h2.set_xlabel('Process')
+                    ax_h2.set_ylabel('Count')
+                    st.pyplot(fig_h2)
+                    plt.close(fig_h2)
+
+            # high risk trend
+            st.markdown("#### High Risk Sample Trend")
+            fig_h3, ax_h3 = plt.subplots(figsize=(12, 3))
+            x_idx = range(len(log_df))
+            ax_h3.bar(x_idx, log_df['high_risk_count'].values[::-1],
+                      color='#ff4b4b', alpha=0.7, label='High Risk Count')
+            ax_h3.plot(x_idx, log_df['anomaly_count'].values[::-1],
+                       color='steelblue', marker='o', linewidth=1.5,
+                       markersize=4, label='Total Anomaly Count')
+            ax_h3.set_title('High Risk vs Anomaly Count Trend')
+            ax_h3.set_xlabel('Execution Index')
+            ax_h3.legend()
+            st.pyplot(fig_h3)
+            plt.close(fig_h3)
+
+            st.markdown("---")
+            # ─────────────────────────────────────────────────────────────────
+
             st.markdown("### Log Statistics")
             s1, s2, s3 = st.columns(3)
             s1.metric("Total Executions", f"{len(log_df)}")
             s2.metric("Avg Anomaly Count", f"{log_df['anomaly_count'].mean():.0f}")
             s3.metric("Immediate Action Rate",
                       f"{(log_df['priority']=='즉시 조치').sum()/len(log_df)*100:.0f}%")
+
+        st.markdown("---")
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
     else:
         st.info("No operation logs yet. Run the Agent pipeline to start logging.")
