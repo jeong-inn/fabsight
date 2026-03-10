@@ -78,9 +78,22 @@ Autonomous Fab 관점의 AI 운영 시스템을 구현한 프로젝트입니다.
 - HIGH / MEDIUM / LOW 위험 등급 분류
 - 모델 성능 비교표 (Precision / Recall / F1 / ROC-AUC)
 
-###  핵심 센서 분석 (SHAP)
+###  핵심 센서 분석 (SHAP + 공정별 기여도)
 - SHAP Feature Importance 기반 Top 5 센서 추출
-- 센서 번호 → 공정명 매핑 (CVD_Chamber_Pressure 등)
+- 센서 번호 → 공정명 매핑 (CVD / ETCH / CMP / LITHO)
+- 센서 중요도 → 공정 기여도로 집계 (Anomaly Contribution Analysis)
+
+**공정별 이상 기여도 분석 결과:**
+
+| 공정 | 기여도 | 핵심 센서 |
+|---|---|---|
+| CVD | 40.3% | Sensor_31, Sensor_419 |
+| ETCH | 22.0% | Sensor_487 |
+| CMP | 19.8% | Sensor_545 |
+| LITHO | 17.9% | Sensor_59 |
+
+> CVD 공정이 전체 이상의 40.3%를 차지 → 조치 우선순위 1순위
+> 단순 센서 중요도에서 공정 단위 분석으로 확장하여 운영자 의사결정 지원
 
 ###  Agent 기반 이상 진단 (4단계 파이프라인)
 | Agent | 역할 | 입력 | 출력 |
@@ -111,14 +124,32 @@ Autonomous Fab 관점의 AI 운영 시스템을 구현한 프로젝트입니다.
 
 ##  모델 성능
 
+### 최종 모델 성능
+
 | 모델 | Precision | Recall | F1 | ROC-AUC |
 |---|---|---|---|---|
 | SPC (3-sigma) | - | - | - | - |
 | Isolation Forest + PCA | 0.120 | 0.120 | 0.120 | - |
-| Risk Scorer (GBM + SMOTE + PCA) | 0.120 | 0.667 | 0.203 | 0.626 |
+| Risk Scorer (GBM + SMOTE + PCA + Threshold) | 0.079 | 0.476 | 0.135 | 0.584 |
 
-> SECOM 데이터셋 특성상 446개 고차원 센서로 인한 차원의 저주로 탐지 성능이 낮게 나타남.  
-> 이를 해결하기 위해 SHAP 기반 핵심 센서 추출 → Agent 진단 구조로 보완.
+---
+
+### 실험 설계 (GBM Ablation Study)
+
+클래스 불균형(14:1) 문제를 단계적으로 해결한 실험 결과:
+
+| Setting | Precision | Recall | F1 | ROC-AUC |
+|---|---|---|---|---|
+| Baseline (GBM) | 0.250 | 0.095 | 0.138 | 0.729 |
+| + SMOTE | 0.333 | 0.048 | 0.083 | 0.652 |
+| + SMOTE + PCA | 0.182 | 0.095 | 0.125 | 0.535 |
+| + SMOTE + PCA + Threshold Tuning | 0.079 | **0.476** | 0.135 | 0.584 |
+
+**설계 근거:**
+- SMOTE 단독: 고차원(446차원)에서 합성 샘플 품질 저하 → Recall 오히려 감소
+- PCA 추가: 50차원으로 축소 후 SMOTE 효과 회복
+- Threshold Tuning: 운영 임계값 0.2 + class weight 8 적용으로 Recall 0.095 → 0.476 (5배 개선)
+- **ROC-AUC 하락은 의도된 트레이드오프**: 반도체 공정에서 미탐지(False Negative)는 수율 손실로 직결되므로 Recall 최대화 전략 선택. 오탐지 비용 < 미탐지 비용.
 
 ---
 
@@ -164,13 +195,42 @@ fabsight/
 ```
 
 ---
+##  운영 시나리오
 
+### Scenario 1 — CVD 공정 이상 감지 및 자동 진단
+```
+1. CVD 챔버 압력 센서(Sensor_31) 드리프트 발생
+2. Isolation Forest → 이상 샘플 탐지
+3. GBM Risk Scorer → 위험도 0.85 (HIGH)
+4. SHAP 분석 → CVD 공정 기여도 40.3% 확인
+5. ReAct Agent → analyze_anomaly → diagnose_root_cause → get_action_plan 순서로 자동 판단
+6. 운영자에게 "챔버 압력 센서 점검 / 가스 유량 컨트롤러 확인" 조치 리포트 전달
+```
+
+### Scenario 2 — ETCH 공정 위험도 상승 모니터링
+```
+1. ETCH 플라즈마 관련 센서(Sensor_487) 이상 징후
+2. SPC 관리도 → UCL 이탈 감지
+3. Risk Score 점진적 상승 → WARNING 알림 발생
+4. Digital Twin Simulator → ETCH 공정 drift 누적 시뮬레이션
+5. 사전 예방 조치 → "RF 매칭 네트워크 점검 / 가스 흐름 균일성 체크"
+```
+
+### Scenario 3 — 다중 공정 동시 이상
+```
+1. CVD + CMP 동시 이상 징후 → 고위험 샘플 급증
+2. CRITICAL 배너 자동 표시
+3. Agent → 복합 근본 원인 분석 → 우선순위 기반 조치 계획 생성
+4. 운영 로그 자동 저장 → 이력 추적
+```
+
+---
 
 ##  설계 의도 및 기술적 고려사항
 
 - **SPC → IF 순서**: 정규분포 가정의 SPC 한계를 보완하기 위해 비지도 ML 기반 Isolation Forest 병행
 - **SHAP 도입 이유**: 446차원 고차원 센서 데이터에서 IF 성능 저하(차원의 저주) → 핵심 센서 추출로 해석 가능성 확보
-- **Agent 구조 선택**: 단순 LLM 프롬프트 호출이 아닌 역할 분리된 4단계 파이프라인으로 확장성 및 유지보수성 확보
+- **Agent 구조 선택**: OpenAI Function Calling 기반 ReAct 패턴 구현. LLM이 analyze_anomaly / diagnose_root_cause / get_action_plan / generate_report Tool을 스스로 판단하여 순서대로 호출하고 각 결과를 컨텍스트로 누적해 최종 리포트 생성.
 - **센서 익명화 대응**: 실무 환경에서는 EDD 연동 + LLM RAG 구조로 센서명 자동 변환 아키텍처 확장 가능
 - **Risk Scoring 방식**: SECOM은 정적 샘플 데이터로 시계열 예측이 부적합 → 현재 센서 상태 기반 고장 위험도 분류로 설계
 

@@ -117,9 +117,7 @@ kpi4.metric("Anomaly Rate", f"{anomaly_rate:.1f}%")
 kpi5.metric("Sensor Features", f"{X.shape[1]}")
 st.markdown("---")
 
-if 'active_tab' not in st.session_state:
-    st.session_state.active_tab = 0
-    
+
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "FAB Monitoring",
     "SPC Control Chart",
@@ -412,6 +410,18 @@ with tab4:
                 <p style='font-size:11px; color:#555; margin:0; text-align:left'>{sensor_list}</p>
                 </div>""", unsafe_allow_html=True)
         # ──────────────────────────────────────────────────────────────────────
+
+
+        if os.path.exists("data/raw/process_contribution.png"):
+            st.markdown("---")
+            st.markdown("### Process Contribution Analysis")
+            st.caption("공정별 이상 기여도 분석 (SHAP 기반)")
+            col_pct = st.columns(4)
+            contributions = {"CVD": 40.3, "ETCH": 22.0, "CMP": 19.8, "LITHO": 17.9}
+            colors = {"CVD": "#ff4b4b", "ETCH": "#ffa500", "CMP": "#4a90d9", "LITHO": "#4ad94a"}
+            for i, (proc, pct) in enumerate(contributions.items()):
+                col_pct[i].metric(f"{proc}", f"{pct}%", "contribution")
+            st.image("data/raw/process_contribution.png", caption="Process Anomaly Contribution")
 
         if os.path.exists("data/raw/shap_summary.png"):
             st.markdown("---")
