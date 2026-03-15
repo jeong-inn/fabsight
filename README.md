@@ -6,6 +6,9 @@
 [![OpenAI](https://img.shields.io/badge/LLM-GPT--4o--mini-green)](https://openai.com)
 [![Demo](https://img.shields.io/badge/Live-Demo-orange)](https://jeong-inn-fabsight-srcdashboardapp-mcwb99.streamlit.app)
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://jeong-inn-fabsight-srcdashboardapp-mcwb99.streamlit.app/)
+https://jeong-inn-fabsight-srcdashboardapp-mcwb99.streamlit.app/
+
 FabSight는 반도체 제조 공정의 설비 이상 탐지, 고장 위험 조기 예측, Agent 기반 진단, Digital Twin inspired 시뮬레이션을 결합한 **AI 운영 분석 시스템**입니다.
 
 ![FabSight Demo](docs/fabsight-demo.gif)
