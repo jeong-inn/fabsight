@@ -1,20 +1,48 @@
 import pandas as pd
 import os
+import logging
 from openai import OpenAI
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 
+# Setup logger
+logger = logging.getLogger(__name__)
 
-def generate_report(top5_sensors, anomaly_count, total_count):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    sensor_list = "\n".join([
-        f"- 센서 {row['sensor']}: SHAP score {row['shap_score']:.4f}"
-        for row in top5_sensors
-    ])
+class LLMReportGenerator:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    prompt = f"""
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def _call_api(self, prompt: str) -> str:
+        """Call OpenAI API with retry logic"""
+        logger.info("Calling OpenAI API for LLM report generation")
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.3
+            )
+            logger.info("LLM report generation successful")
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"LLM report generation error: {str(e)}")
+            raise
+
+    def generate(self, top5_sensors, anomaly_count, total_count):
+        """Generate anomaly analysis report using LLM"""
+        sensor_list = "\n".join([
+            f"- 센서 {row['sensor']}: SHAP score {row['shap_score']:.4f}"
+            for row in top5_sensors
+        ])
+
+        prompt = f"""
 당신은 반도체 제조 설비 운영 및 데이터 분석 전문가입니다.
 아래는 공정 이상 탐지 분석 결과입니다.
 
@@ -38,15 +66,13 @@ def generate_report(top5_sensors, anomaly_count, total_count):
 
 한국어로, 현장 엔지니어가 바로 읽고 조치할 수 있도록 명확하고 전문적인 톤으로 작성해주세요.
 """
+        return self._call_api(prompt)
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=800,
-        temperature=0.3
-    )
 
-    return response.choices[0].message.content
+def generate_report(top5_sensors, anomaly_count, total_count):
+    """Legacy function for backward compatibility"""
+    generator = LLMReportGenerator()
+    return generator.generate(top5_sensors, anomaly_count, total_count)
 
 
 if __name__ == "__main__":

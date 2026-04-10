@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import logging
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import GradientBoostingClassifier, IsolationForest
@@ -8,6 +9,9 @@ from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 import warnings
 warnings.filterwarnings('ignore')
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 def load_data():
     X = pd.read_csv('data/raw/X_processed.csv')
@@ -20,7 +24,7 @@ def preprocess(X, n_components=50):
     X_scaled = scaler.fit_transform(X)
     pca = PCA(n_components=n_components, random_state=42)
     X_pca = pca.fit_transform(X_scaled)
-    print(f"PCA 설명 분산: {pca.explained_variance_ratio_.sum():.3f}")
+    logger.info(f"PCA 설명 분산: {pca.explained_variance_ratio_.sum():.3f}")
     return X_pca, scaler, pca
 
 def evaluate_gbm(X_pca, y):
@@ -55,12 +59,12 @@ def evaluate_gbm(X_pca, y):
                     'y_prob': y_prob
                 }
 
-    print("\n=== GBM 최적 결과 (threshold + class_weight 튜닝) ===")
-    print(f"weight={best_result['weight']}, threshold={best_result['threshold']}")
-    print(f"Precision: {best_result['precision']:.3f}")
-    print(f"Recall:    {best_result['recall']:.3f}")
-    print(f"F1:        {best_result['f1']:.3f}")
-    print(f"ROC-AUC:   {roc_auc_score(y_test_orig, best_result['y_prob']):.3f}")
+    logger.info("GBM 최적 결과 (threshold + class_weight 튜닝)")
+    logger.info(f"weight={best_result['weight']}, threshold={best_result['threshold']}")
+    logger.info(f"Precision: {best_result['precision']:.3f}")
+    logger.info(f"Recall:    {best_result['recall']:.3f}")
+    logger.info(f"F1:        {best_result['f1']:.3f}")
+    logger.info(f"ROC-AUC:   {roc_auc_score(y_test_orig, best_result['y_prob']):.3f}")
 
 def evaluate_isolation_forest(X_pca, y):
     iso = IsolationForest(
@@ -68,8 +72,8 @@ def evaluate_isolation_forest(X_pca, y):
     )
     iso.fit(X_pca)
     y_pred = (iso.predict(X_pca) == -1).astype(int)
-    print("\n=== Isolation Forest + PCA 결과 ===")
-    print(classification_report(y, y_pred))
+    logger.info("Isolation Forest + PCA 결과")
+    logger.info(f"\n{classification_report(y, y_pred)}")
 
 if __name__ == "__main__":
     X, y = load_data()

@@ -5,8 +5,13 @@ import numpy as np
 from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
+import logging
 
 load_dotenv()
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # ── Tool 정의 ──────────────────────────────────────────
 TOOLS = [
@@ -146,6 +151,28 @@ class FabReActAgent:
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.context = {}
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def _call_api(self, messages: list) -> dict:
+        """Call OpenAI API with retry logic"""
+        logger.info("Calling OpenAI API for ReAct Agent")
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                max_tokens=1000,
+                temperature=0.2
+            )
+            logger.info("OpenAI API call successful")
+            return response
+        except Exception as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            raise
+
     def run(self, detection_data: dict, diagnosis_data: dict) -> dict:
         causes = diagnosis_data.get("root_causes", [{}])
         top = causes[0] if causes else {}
@@ -182,14 +209,7 @@ class FabReActAgent:
         max_iterations = 6
 
         for i in range(max_iterations):
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=1000,
-                temperature=0.2
-            )
+            response = self._call_api(messages)
 
             msg = response.choices[0].message
 
@@ -270,8 +290,30 @@ class ActionAgent:
         }
 
 class ReportAgent:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    def _call_api(self, prompt: str) -> str:
+        """Call OpenAI API with retry logic"""
+        logger.info("Calling OpenAI API for report generation")
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=800,
+                temperature=0.3
+            )
+            logger.info("Report generation API call successful")
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Report generation API error: {str(e)}")
+            raise
+
     def run(self, detection, diagnosis, action):
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         causes_text = "\n".join([
             f"  - {c['label']} (공정: {c['process']}, SHAP: {c['shap_score']})"
             for c in diagnosis["root_causes"]
@@ -287,12 +329,7 @@ class ReportAgent:
 [권장 조치]
 {chr(10).join(f'{i+1}. {a}' for i, a in enumerate(action['recommended_actions']))}
 FAB 운영자를 위한 간결한 이상 분석 리포트를 한국어로 작성하세요."""
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=800, temperature=0.3
-        )
-        return response.choices[0].message.content
+        return self._call_api(prompt)
 
 class FabAgentPipeline:
     def __init__(self):

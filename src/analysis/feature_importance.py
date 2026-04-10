@@ -4,15 +4,19 @@ import matplotlib.pyplot as plt
 import shap
 import os
 import warnings
+import logging
 from sklearn.ensemble import IsolationForest
 from sklearn.model_selection import train_test_split
 
 warnings.filterwarnings('ignore')
+
+# Setup logger
+logger = logging.getLogger(__name__)
 plt.rcParams['font.family'] = 'AppleGothic'  # Mac 한글 폰트
 plt.rcParams['axes.unicode_minus'] = False
 
 def get_shap_values(model, X_test):
-    print("SHAP 값 계산 중... (1~2분 소요)")
+    logger.info("SHAP 값 계산 중... (1~2분 소요)")
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X_test)
 
@@ -50,9 +54,11 @@ def plot_top_sensors_bar(top_sensors, save_path="data/raw/top_sensors.png"):
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
     plt.close()
-    print(f"Top Sensors 차트 저장: {save_path}")
+    logger.info(f"Top Sensors 차트 저장: {save_path}")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     X = pd.read_csv("data/raw/X_processed.csv")
     y = pd.read_csv("data/raw/y.csv").squeeze()
     y = -y  # SECOM 라벨 변환
@@ -69,19 +75,19 @@ if __name__ == "__main__":
         n_jobs=-1
     )
     model.fit(X_train)
-    print("모델 학습 완료")
+    logger.info("모델 학습 완료")
 
     shap_values_2d = get_shap_values(model, X_test)
 
     top_sensors = get_top_sensors(shap_values_2d, list(X_test.columns), top_n=10)
-    print("\n=== 이상에 영향을 미치는 Top 10 센서 ===")
+    logger.info("이상에 영향을 미치는 Top 10 센서")
     for i, (sensor, score) in enumerate(top_sensors, 1):
-        print(f"{i:2d}. 센서 {sensor:>6} | SHAP score: {score:.4f}")
+        logger.info(f"{i:2d}. 센서 {sensor:>6} | SHAP score: {score:.4f}")
 
     plot_shap_summary(shap_values_2d, X_test)
     plot_top_sensors_bar(top_sensors)
 
     top5_df = pd.DataFrame(top_sensors[:5], columns=['sensor', 'shap_score'])
     top5_df.to_csv("data/raw/top5_sensors.csv", index=False)
-    print("\nTop 5 센서 저장 완료: data/raw/top5_sensors.csv")
-    print("\nFeature Importance 완료!")
+    logger.info("Top 5 센서 저장 완료: data/raw/top5_sensors.csv")
+    logger.info("Feature Importance 완료!")
